@@ -1,11 +1,17 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { encryptData, decryptData, generateSHA256 } from '@/utils/crypto';
 import { hideDataInCanvas, extractDataFromCanvas } from '@/utils/stego';
 import { connectWallet, storeHashOnBlockchain } from '@/utils/web3';
+import HardwareLogin from '@/components/HardwareLogin';
 
 export default function Home() {
+  // Authentication & Hardware Security Gateway
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [hardwareOnline, setHardwareOnline] = useState(false);
+
   // Navigation
   const [activeTab, setActiveTab] = useState('ingest'); // 'ingest' | 'extract' | 'audit' | 'specs'
 
@@ -43,6 +49,48 @@ export default function Home() {
 
   const canvasRef = useRef(null);
   const extractCanvasRef = useRef(null);
+
+  // Enforce fresh hardware authentication on mount and page refresh
+  useEffect(() => {
+    const lockOnMount = async () => {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } catch {
+        // network error handled silently
+      } finally {
+        setIsAuthenticated(false);
+        setIsCheckingAuth(false);
+      }
+    };
+
+    lockOnMount();
+  }, []);
+
+  // Track Hardware Online Status while authenticated
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const checkHw = async () => {
+      try {
+        const res = await fetch('/api/auth/status', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          setHardwareOnline(Boolean(data.hardware?.deviceConnected));
+        }
+      } catch {}
+    };
+    checkHw();
+    const interval = setInterval(checkHw, 3000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated]);
+
+  // Handle Logout & Lock
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+    setIsAuthenticated(false);
+    showToast('Vault session locked. Please re-authenticate on ESP32 keypad.', 'info');
+  };
 
   // Toast Notification Helper
   const showToast = (msg, type = 'info') => {
@@ -279,6 +327,23 @@ export default function Home() {
 
   const pwdStrength = getPasswordStrength(password);
 
+  // Loading Screen while verifying active HttpOnly session
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-950 font-mono text-cyan-400">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs tracking-wider animate-pulse">CONNECTING TO TRIPLE-SHIELD SECURITY GATEWAY...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // If unauthenticated, show the Hardware Keypad Login Screen
+  if (!isAuthenticated) {
+    return <HardwareLogin onAuthenticated={() => setIsAuthenticated(true)} />;
+  }
+
   return (
     <main className="min-h-screen pb-16 pt-6 px-4 sm:px-8 max-w-7xl mx-auto scanline-bg">
       {/* Toast Notification Alert */}
@@ -320,8 +385,17 @@ export default function Home() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-400 text-xs font-mono">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-mono ${
+              hardwareOnline
+                ? 'bg-emerald-950/60 border-emerald-500/30 text-emerald-400'
+                : 'bg-amber-950/60 border-amber-500/30 text-amber-400'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${hardwareOnline ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              <span>{hardwareOnline ? 'ESP32 ONLINE' : 'ESP32 OFFLINE'}</span>
+            </div>
+
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-400 text-xs font-mono">
+              <span className="w-2 h-2 rounded-full bg-cyan-400" />
               <span>3/3 LAYERS ACTIVE</span>
             </div>
 
@@ -334,6 +408,17 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
               </svg>
               {walletAddress ? `${walletAddress.substring(0, 6)}...${walletAddress.substring(walletAddress.length - 4)}` : 'Connect Web3 Wallet'}
+            </button>
+
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 hover:border-red-500/60 text-red-300 text-xs font-mono transition-all shadow-md cursor-pointer"
+              title="Lock Vault and Return to Hardware Keypad Login"
+            >
+              <svg className="w-3.5 h-3.5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              Lock Vault
             </button>
           </div>
         </div>
